@@ -1,0 +1,17 @@
+{
+  "name": "mediaproxyagent",
+  "version": "0.0.1",
+  "description": "A simple, efficient agent designed to extend Oldcord's WebRTC voice capabilities across multiple geographic regions.",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "mediasoup": "^3.19.17",
+    "semantic-sdp": "^3.31.1",
+    "ws": "^8.19.0"
+  }
+}
