@@ -9,7 +9,7 @@ let users = new Map();
 let currentSocket = null;
 
 if (process.argv.length < 3) {
-    console.log(`[MEDIA RELAY AGENT] **Error: Listen port required.**
+    console.log(`[MEDIA PROXY AGENT] **Error: Listen port required.**
 
 You must specify the port to listen on.
 
@@ -144,10 +144,10 @@ async function start() {
 
     const wss = new ws.WebSocketServer({ port: listen_port });
 
-    console.log(`[MEDIA RELAY AGENT] Listening on port ${listen_port}...`);
+    console.log(`[MEDIA PROXY AGENT] Listening on port ${listen_port}...`);
 
     wss.on('connection', (socket) => {
-        console.log(`[MEDIA RELAY AGENT] Main server connected!`);
+        console.log(`[MEDIA PROXY AGENT] Main server connected!`);
         currentSocket = socket;
 
         socket.send(JSON.stringify({
@@ -176,8 +176,8 @@ async function start() {
 
                 internal_config = json.d.config;
 
-                console.log(`[MEDIA RELAY AGENT] Identified with main server! There are ${location - 1} other server(s) in front of us.`);
-                console.log(`[MEDIA RELAY AGENT] Received configuration from the main server!`);
+                console.log(`[MEDIA PROXY AGENT] Identified with main server! There are ${location - 1} other server(s) in front of us.`);
+                console.log(`[MEDIA PROXY AGENT] Received configuration from the main server!`);
                 console.log(JSON.stringify(internal_config));
             } else if (json.op === 'HEARTBEAT_INFO') {
                 let heartbeat_interval = json.d.heartbeat_interval;
@@ -189,7 +189,7 @@ async function start() {
                     }));
                 }, heartbeat_interval);
             } else if (json.op === 'CLIENT_CLOSE') {
-                console.log(`[MEDIA RELAY AGENT] Client closed! Removed from internal store.`);
+                console.log(`[MEDIA PROXY AGENT] Client closed! Removed from internal store.`);
 
                 users.delete(json.d.user_id);
             } else if (json.op === 'CLIENT_IDENTIFY') {
@@ -198,7 +198,7 @@ async function start() {
                 let ssrc = json.d.ssrc;
                 let room_id = json.d.room_id;
 
-                console.log(`[MEDIA RELAY AGENT] Client (${user_id}) joined room id: ${room_id}`);
+                console.log(`[MEDIA PROXY AGENT] Client (${user_id}) joined room id: ${room_id}`);
 
                 let client = await mediaserver.join(room_id, user_id, socket, 'guild-voice');
                 
@@ -244,7 +244,7 @@ async function start() {
                     }
                 }));
 
-                console.log(`[MEDIA RELAY AGENT] Answered client (${user_id})`);
+                console.log(`[MEDIA PROXY AGENT] Answered client (${user_id})`);
             } else if (json.op === 'CLIENT_SPEAKING') {
                 let ip_address = json.d.ip_address;
                 let user_id = json.d.user_id;
@@ -271,14 +271,14 @@ async function start() {
                 let producerClient = user.client;
 
                 if (!producerClient.isProducingAudio()) {
-                    console.log(`[MEDIA RELAY AGENT] Client ${user_id} sent a speaking packet but has no audio producer.`);
+                    console.log(`[MEDIA PROXY AGENT] Client ${user_id} sent a speaking packet but has no audio producer.`);
                     return;
                 }
 
                 let incomingSSRCs = producerClient.getIncomingStreamSSRCs();
 
                 if (incomingSSRCs.audio_ssrc !== audio_ssrc) {
-                    console.log(`[MEDIA RELAY AGENT] [${user_id}] SSRC mismatch detected. Correcting audio SSRC from ${incomingSSRCs.audio_ssrc} to ${audio_ssrc}.`);
+                    console.log(`[MEDIA PROXY AGENT] [${user_id}] SSRC mismatch detected. Correcting audio SSRC from ${incomingSSRCs.audio_ssrc} to ${audio_ssrc}.`);
 
                     producerClient.stopPublishingTrack("audio");
 
@@ -328,7 +328,7 @@ async function start() {
                         const ssrcInfo = client.getOutgoingStreamSSRCsForUser(user_id);
 
                         if (speaking && ssrcInfo.audio_ssrc === 0) {
-                            console.log(`[MEDIA RELAY AGENT] Suppressing speaking packet for ${client.user_id} as consumer for ${user_id} is not ready (ssrc=0).`);
+                            console.log(`[MEDIA PROXY AGENT] Suppressing speaking packet for ${client.user_id} as consumer for ${user_id} is not ready (ssrc=0).`);
                             return Promise.resolve();
                         }
 
@@ -381,7 +381,7 @@ async function start() {
                 });
 
                 if (wantsToProduceAudio && !isCurrentlyProducingAudio) {
-                    console.log(`[MEDIA RELAY AGENT] [${user_id}] Starting audio production with ssrc ${d.audio_ssrc}`);
+                    console.log(`[MEDIA PROXY AGENT] [${user_id}] Starting audio production with ssrc ${d.audio_ssrc}`);
                     await producerClient.publishTrack("audio", { audio_ssrc: d.audio_ssrc });
 
                     for (const client of producerClient.room.clients.values()) {
@@ -391,7 +391,7 @@ async function start() {
                     }
                 }
                 else if (!wantsToProduceAudio && isCurrentlyProducingAudio) {
-                    console.log(`[MEDIA RELAY AGENT] [${user_id}] Stopping audio production.`);
+                    console.log(`[MEDIA PROXY AGENT] [${user_id}] Stopping audio production.`);
                     producerClient.stopPublishingTrack("audio");
 
                     for (const client of producerClient.room.clients.values()) {
@@ -400,7 +400,7 @@ async function start() {
                 }
 
                 if (wantsToProduceVideo && !isCurrentlyProducingVideo) {
-                    console.log(`[MEDIA RELAY AGENT] [${user_id}] Starting video production with ssrc ${d.video_ssrc}`);
+                    console.log(`[MEDIA PROXY AGENT] [${user_id}] Starting video production with ssrc ${d.video_ssrc}`);
                     await producerClient.publishTrack("video", { video_ssrc: d.video_ssrc, rtx_ssrc: d.rtx_ssrc });
 
                     for (const client of producerClient.room.clients.values()) {
@@ -410,7 +410,7 @@ async function start() {
                     }
                 }
                 else if (!wantsToProduceVideo && isCurrentlyProducingVideo) {
-                    console.log(`[MEDIA RELAY AGENT] [${user_id}] Stopping video production.`);
+                    console.log(`[MEDIA PROXY AGENT] [${user_id}] Stopping video production.`);
                     producerClient.stopPublishingTrack("video");
 
                     for (const client of producerClient.room.clients.values()) {
@@ -444,7 +444,7 @@ async function start() {
         });
 
         socket.on('close', () => {
-            console.log(`[MEDIA RELAY AGENT] Main server disconnected!`);
+            console.log(`[MEDIA PROXY AGENT] Main server disconnected!`);
             if (currentSocket === socket) {
                 currentSocket = null;
                 users.clear();
@@ -452,7 +452,7 @@ async function start() {
         });
 
         socket.on('error', (err) => {
-            console.log(`[MEDIA RELAY AGENT] Socket error: ${err}`);
+            console.log(`[MEDIA PROXY AGENT] Socket error: ${err}`);
         });
     });
 }
