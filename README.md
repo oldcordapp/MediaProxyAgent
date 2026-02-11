@@ -1,6 +1,6 @@
 # MediaProxyAgent
 A simple, efficient agent designed to extend Oldcord's WebRTC voice capabilities across multiple geographic regions. <br>
-The **Media Proxy Agent** connects directly to your Oldcord Media Relay Signaling Server, enabling you to deploy media servers dedicated solely to voice traffic in different locations (e.g., US-East, EU-Central). This improves latency and quality for users worldwide. <br>
+The **Media Proxy Agent** acts as a server for Oldcord to connect to, enabling you to deploy media servers dedicated solely to voice traffic in different locations (e.g., US-East, EU-Central). This improves latency and quality for users worldwide. <br>
 
 # Features
   - **Regional Voice Deployment**: Easily scale your instance's voice capabilities.
@@ -22,14 +22,14 @@ Before using, please make sure your Oldcord instance has `mr_server` -> `enabled
   ```
 
 3. **Run the agent** <br>
-    Start the agent on your target server, passing the Signaling Server URL and the public IP exposure flag.
+    Start the agent on your target server, passing the port and the public IP exposure flag.
     Argument | Summary | Example
     --- | --- | --- |
-    [CONNECTION_URL] | The websocket URL for your Oldcord MR Signaling Server. | ws://localhost:8080/
+    [PORT] | Set the port for the server to listen on | 4444
     [PUBLIC_IP_FLAG] | Set to true to use the server's public IP address (Recommended for production) or false to use a local IP address | true
     
-    Example usage: `node server.js ws://localhost:8080/ true`
+    Example usage: `node server.js 4444 true`
 
 4. **Profit** <br>
-    The agent will connect, exchange connection information for future clients, wait for instructions from the Signaling Server to manage voice rooms and manage the actual webrtc voice traffic by itself. <br>
+    Oldcord will connect to the server, exchange connection information for future clients, wait for instructions from the Signaling Server to manage voice rooms and manage the actual webrtc voice traffic by itself. <br>
     Now go join some voice calls (Provided you're using 2017 or 2018 client builds and Chromium) and have fun!

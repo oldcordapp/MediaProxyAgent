@@ -6,27 +6,24 @@ const maxPort = 6000;
 const mediaserver = new MediasoupSignalingDelegate();
 
 let users = new Map();
+let currentSocket = null;
 
 if (process.argv.length < 3) {
-    console.log(`[MEDIA RELAY CLIENT] **Error: Connection URL required.**
+    console.log(`[MEDIA RELAY AGENT] **Error: Listen port required.**
 
-You must specify the WebSocket URL for the media relay signaling server.
+You must specify the port to listen on.
 
 **Proper Usage:**
-node server.js <WebSocket_URL> [use_public_ip_flag]
+node server.js <PORT> [use_public_ip_flag]
 
-- **<WebSocket_URL>**: The URL of the server to connect to (e.g., ws://127.0.0.1:8080).
+- **<PORT>**: The port to listen for connections (e.g., 4444).
 - **[use_public_ip_flag]**: An optional argument. Pass **true** to use the machine's public IP address for relaying instead of a local one.`);
     return;
 }
 
-let url = process.argv[2];
+let listen_port = parseInt(process.argv[2]);
 let use_public_ip = process.argv[3] && process.argv[3].toLowerCase() === 'true';
 let internal_config;
-
-console.log(`[MEDIA RELAY CLIENT] Connecting to ${url}...`);
-
-const WebSocket = new ws.WebSocket(url);
 
 global.MEDIA_CODECS = [
     {
@@ -56,7 +53,7 @@ global.MEDIA_CODECS = [
 ];
 
 global.onClientJoinedRoom = async (_client) => {
-    if (!_client.webrtcConnected || !_client.voiceRoomId || !_client.room) return;
+    if (!_client.webrtcConnected || !_client.voiceRoomId || !_client.room || !currentSocket) return;
 
     let clients = new Set(_client.room._clients.values());
     let video_batch = {};
@@ -112,7 +109,7 @@ global.onClientJoinedRoom = async (_client) => {
     );
 
     if (Object.entries(video_batch).length > 0) {
-        WebSocket.send(JSON.stringify({
+        currentSocket.send(JSON.stringify({
             op: "VIDEO_BATCH",
             d: video_batch
         }));
@@ -134,9 +131,7 @@ function getIPAddress() {
     return '0.0.0.0';
 }
 
-WebSocket.on('open', async () => {
-    console.log(`[MEDIA RELAY CLIENT] Connected to the media relay signaling server!`);
-
+async function start() {
     let ip_address = getIPAddress();
 
     if (use_public_ip) {
@@ -147,289 +142,319 @@ WebSocket.on('open', async () => {
 
     await mediaserver.start(ip_address, minPort, maxPort, true);
 
-    WebSocket.send(JSON.stringify({
-        op: "IDENTIFY",
-        d: {
-            public_ip: ip_address,
-            public_port: mediaserver.port,
-            timestamp: Date.now()
-        }
-    }));
-});
+    const wss = new ws.WebSocketServer({ port: listen_port });
 
-WebSocket.on('message', async (data) => {
-    let json = JSON.parse(Buffer.from(data).toString('utf-8'));
+    console.log(`[MEDIA RELAY AGENT] Listening on port ${listen_port}...`);
 
-    console.log(JSON.stringify(json));
+    wss.on('connection', (socket) => {
+        console.log(`[MEDIA RELAY AGENT] Main server connected!`);
+        currentSocket = socket;
 
-    if (json.op === 'ALRIGHT') {
-        let location = json.d.location;
-
-        internal_config = json.d.config;
-
-        console.log(`[MEDIA RELAY CLIENT] Identified with media relay signaling server! There are ${location - 1} other server(s) in front of us.`);
-        console.log(`[MEDIA RELAY CLIENT] Received configuration from the media relay signaling server!`);
-        console.log(JSON.stringify(internal_config));
-    } else if (json.op === 'HEARTBEAT_INFO') {
-        let heartbeat_interval = json.d.heartbeat_interval;
-
-        setInterval(() => {
-            WebSocket.send(JSON.stringify({
-                op: "HEARTBEAT",
-                d: Date.now()
-            }));
-        }, heartbeat_interval);
-    } else if (json.op === 'CLIENT_CLOSE') {
-        console.log(`[MEDIA RELAY CLIENT] Client closed! Removed from internal store.`);
-
-        users.delete(json.d.user_id);
-    } else if (json.op === 'CLIENT_IDENTIFY') {
-        let ip_address = json.d.ip_address;
-        let user_id = json.d.user_id;
-        let ssrc = json.d.ssrc;
-        let room_id = json.d.room_id;
-
-        console.log(`[MEDIA RELAY CLIENT] Client (${user_id}) joined room id: ${room_id}`);
-
-        let client = await mediaserver.join(room_id, user_id, WebSocket, 'guild-voice');
-        
-        client.initIncomingSSRCs({
-            audio_ssrc: 0,
-            video_ssrc: 0,
-            rtx_ssrc: 0
-        });
-
-        users.set(user_id, {
-            ip_address: ip_address,
-            ssrc: ssrc,
-            room_id: room_id,
-            client: client,
-            is_speaking: false,
-            last_speaking_update: 0
-        });
-    } else if (json.op === 'OFFER') {
-        let sdp = json.d.sdp;
-        let codecs = json.d.codecs;
-        let ip_address = json.d.ip_address;
-        let user_id = json.d.user_id;
-        let room_id = json.d.room_id;
-        let client_build = json.d.client_build;
-        let client_build_date = new Date(json.d.client_build_date);
-
-        let user = users.get(user_id);
-
-        if (!user)  {
-            return;
-        }
-
-        let answer = await mediaserver.onOffer(client_build, client_build_date, user.client, sdp, codecs);
-
-        WebSocket.send(JSON.stringify({
-            op: "ANSWER",
+        socket.send(JSON.stringify({
+            op: "HEARTBEAT_INFO",
             d: {
-                room_id: room_id,
-                user_id: user_id,
-                sdp: answer.sdp,
-                audio_codec: 'opus',
-                video_codec: answer.selectedVideoCodec
+                heartbeat_interval: 41250
             }
         }));
 
-        console.log(`[MEDIA RELAY CLIENT] Answered client (${user_id})`);
-    } else if (json.op === 'CLIENT_SPEAKING') {
-        let ip_address = json.d.ip_address;
-        let user_id = json.d.user_id;
-        let room_id = json.d.room_id;
-        let speaking = json.d.speaking;
-        let audio_ssrc = json.d.audio_ssrc;
-
-        const now = Date.now();
-
-        let user = users.get(user_id);
-
-        if (!user) {
-            return;
-        }
-
-        if (user.is_speaking === speaking && (now - user.last_speaking_update) < internal_config.speaking_throttle_ms) {
-            return;
-        }
-
-        user.is_speaking = speaking;
-
-        let speaking_batch = {};
-        let video_batch = {};
-        let producerClient = user.client;
-
-        if (!producerClient.isProducingAudio()) {
-            console.log(`[MEDIA RELAY CLIENT] Client ${user_id} sent a speaking packet but has no audio producer.`);
-            return;
-        }
-
-        let incomingSSRCs = producerClient.getIncomingStreamSSRCs();
-
-        if (incomingSSRCs.audio_ssrc !== audio_ssrc) {
-            console.log(`[MEDIA RELAY CLIENT] [${user_id}] SSRC mismatch detected. Correcting audio SSRC from ${incomingSSRCs.audio_ssrc} to ${audio_ssrc}.`);
-
-            producerClient.stopPublishingTrack("audio");
-
-            producerClient.initIncomingSSRCs({
-                audio_ssrc: audio_ssrc,
-                video_ssrc: incomingSSRCs.video_ssrc,
-                rtx_ssrc: incomingSSRCs.rtx_ssrc
-            });
-
-            await producerClient.publishTrack("audio", { audio_ssrc: audio_ssrc });
-
-            const clientsToNotify = new Set();
-
-            for (const otherClient of producerClient.room.clients.values()) {
-                if (otherClient.user_id === user_id) continue;
-
-                await otherClient.subscribeToTrack(user_id, "audio");
-
-                clientsToNotify.add(otherClient);
+        socket.send(JSON.stringify({
+            op: "IDENTIFY",
+            d: {
+                public_ip: ip_address,
+                public_port: mediaserver.port,
+                timestamp: Date.now()
             }
+        }));
 
-            await Promise.all(
-                Array.from(clientsToNotify).map((client) => {
-                    const updatedSsrcs = client.getOutgoingStreamSSRCsForUser(user_id);
+        socket.on('message', async (data) => {
+            let json = JSON.parse(Buffer.from(data).toString('utf-8'));
 
-                    video_batch[client.user_id] = {
-                        op: 12,
-                        d: {
-                            user_id: user_id,
-                            audio_ssrc: updatedSsrcs.audio_ssrc,
-                            video_ssrc: updatedSsrcs.video_ssrc,
-                            rtx_ssrc: updatedSsrcs.rtx_ssrc
-                        }
-                    }
-                }),
-            );
-        }
+            console.log(JSON.stringify(json));
 
-        await Promise.all(
-            Array.from(
-                mediaserver.getClientsForRtcServer(
-                    room_id,
-                ),
-            ).map((client) => {
-                if (client.user_id === user_id) return Promise.resolve();
+            if (json.op === 'ALRIGHT') {
+                let location = json.d.location;
 
-                const ssrcInfo = client.getOutgoingStreamSSRCsForUser(user_id);
+                internal_config = json.d.config;
 
-                if (speaking && ssrcInfo.audio_ssrc === 0) {
-                    console.log(`[MEDIA RELAY CLIENT] Suppressing speaking packet for ${client.user_id} as consumer for ${user_id} is not ready (ssrc=0).`);
-                    return Promise.resolve();
+                console.log(`[MEDIA RELAY AGENT] Identified with main server! There are ${location - 1} other server(s) in front of us.`);
+                console.log(`[MEDIA RELAY AGENT] Received configuration from the main server!`);
+                console.log(JSON.stringify(internal_config));
+            } else if (json.op === 'HEARTBEAT_INFO') {
+                let heartbeat_interval = json.d.heartbeat_interval;
+
+                setInterval(() => {
+                    socket.send(JSON.stringify({
+                        op: "HEARTBEAT",
+                        d: Date.now()
+                    }));
+                }, heartbeat_interval);
+            } else if (json.op === 'CLIENT_CLOSE') {
+                console.log(`[MEDIA RELAY AGENT] Client closed! Removed from internal store.`);
+
+                users.delete(json.d.user_id);
+            } else if (json.op === 'CLIENT_IDENTIFY') {
+                let ip_address = json.d.ip_address;
+                let user_id = json.d.user_id;
+                let ssrc = json.d.ssrc;
+                let room_id = json.d.room_id;
+
+                console.log(`[MEDIA RELAY AGENT] Client (${user_id}) joined room id: ${room_id}`);
+
+                let client = await mediaserver.join(room_id, user_id, socket, 'guild-voice');
+                
+                client.initIncomingSSRCs({
+                    audio_ssrc: 0,
+                    video_ssrc: 0,
+                    rtx_ssrc: 0
+                });
+
+                users.set(user_id, {
+                    ip_address: ip_address,
+                    ssrc: ssrc,
+                    room_id: room_id,
+                    client: client,
+                    is_speaking: false,
+                    last_speaking_update: 0
+                });
+            } else if (json.op === 'OFFER') {
+                let sdp = json.d.sdp;
+                let codecs = json.d.codecs;
+                let ip_address = json.d.ip_address;
+                let user_id = json.d.user_id;
+                let room_id = json.d.room_id;
+                let client_build = json.d.client_build;
+                let client_build_date = new Date(json.d.client_build_date);
+
+                let user = users.get(user_id);
+
+                if (!user)  {
+                    return;
                 }
 
-                speaking_batch[client.user_id] = {
-                    op: 5,
+                let answer = await mediaserver.onOffer(client_build, client_build_date, user.client, sdp, codecs);
+
+                socket.send(JSON.stringify({
+                    op: "ANSWER",
                     d: {
+                        room_id: room_id,
                         user_id: user_id,
-                        speaking: speaking,
-                        ssrc: ssrcInfo.audio_ssrc
+                        sdp: answer.sdp,
+                        audio_codec: 'opus',
+                        video_codec: answer.selectedVideoCodec
+                    }
+                }));
+
+                console.log(`[MEDIA RELAY AGENT] Answered client (${user_id})`);
+            } else if (json.op === 'CLIENT_SPEAKING') {
+                let ip_address = json.d.ip_address;
+                let user_id = json.d.user_id;
+                let room_id = json.d.room_id;
+                let speaking = json.d.speaking;
+                let audio_ssrc = json.d.audio_ssrc;
+
+                const now = Date.now();
+
+                let user = users.get(user_id);
+
+                if (!user) {
+                    return;
+                }
+
+                if (user.is_speaking === speaking && (now - user.last_speaking_update) < internal_config.speaking_throttle_ms) {
+                    return;
+                }
+
+                user.is_speaking = speaking;
+
+                let speaking_batch = {};
+                let video_batch = {};
+                let producerClient = user.client;
+
+                if (!producerClient.isProducingAudio()) {
+                    console.log(`[MEDIA RELAY AGENT] Client ${user_id} sent a speaking packet but has no audio producer.`);
+                    return;
+                }
+
+                let incomingSSRCs = producerClient.getIncomingStreamSSRCs();
+
+                if (incomingSSRCs.audio_ssrc !== audio_ssrc) {
+                    console.log(`[MEDIA RELAY AGENT] [${user_id}] SSRC mismatch detected. Correcting audio SSRC from ${incomingSSRCs.audio_ssrc} to ${audio_ssrc}.`);
+
+                    producerClient.stopPublishingTrack("audio");
+
+                    producerClient.initIncomingSSRCs({
+                        audio_ssrc: audio_ssrc,
+                        video_ssrc: incomingSSRCs.video_ssrc,
+                        rtx_ssrc: incomingSSRCs.rtx_ssrc
+                    });
+
+                    await producerClient.publishTrack("audio", { audio_ssrc: audio_ssrc });
+
+                    const clientsToNotify = new Set();
+
+                    for (const otherClient of producerClient.room.clients.values()) {
+                        if (otherClient.user_id === user_id) continue;
+
+                        await otherClient.subscribeToTrack(user_id, "audio");
+
+                        clientsToNotify.add(otherClient);
+                    }
+
+                    await Promise.all(
+                        Array.from(clientsToNotify).map((client) => {
+                            const updatedSsrcs = client.getOutgoingStreamSSRCsForUser(user_id);
+
+                            video_batch[client.user_id] = {
+                                op: 12,
+                                d: {
+                                    user_id: user_id,
+                                    audio_ssrc: updatedSsrcs.audio_ssrc,
+                                    video_ssrc: updatedSsrcs.video_ssrc,
+                                    rtx_ssrc: updatedSsrcs.rtx_ssrc
+                                }
+                            }
+                        }),
+                    );
+                }
+
+                await Promise.all(
+                    Array.from(
+                        mediaserver.getClientsForRtcServer(
+                            room_id,
+                        ),
+                    ).map((client) => {
+                        if (client.user_id === user_id) return Promise.resolve();
+
+                        const ssrcInfo = client.getOutgoingStreamSSRCsForUser(user_id);
+
+                        if (speaking && ssrcInfo.audio_ssrc === 0) {
+                            console.log(`[MEDIA RELAY AGENT] Suppressing speaking packet for ${client.user_id} as consumer for ${user_id} is not ready (ssrc=0).`);
+                            return Promise.resolve();
+                        }
+
+                        speaking_batch[client.user_id] = {
+                            op: 5,
+                            d: {
+                                user_id: user_id,
+                                speaking: speaking,
+                                ssrc: ssrcInfo.audio_ssrc
+                            }
+                        }
+                    }),
+                );
+
+                if (Object.entries(video_batch).length > 0) {
+                    socket.send(JSON.stringify({
+                        op: "VIDEO_BATCH",
+                        d: video_batch
+                    }));
+                }
+
+                socket.send(JSON.stringify({
+                    op: "SPEAKING_BATCH",
+                    d: speaking_batch
+                }));
+            } else if (json.op === 'VIDEO') {
+                let user_id = json.d.user_id;
+                let d = json.d;
+
+                let user = users.get(user_id);
+
+                if (!user) {
+                    return;
+                }
+
+                let producerClient = user.client;
+
+                const video_batch = {};
+                const clientsThatNeedUpdate = new Set();
+                const wantsToProduceAudio = d.audio_ssrc !== 0;
+                const wantsToProduceVideo = d.video_ssrc !== 0;
+
+                const isCurrentlyProducingAudio = producerClient.isProducingAudio();
+                const isCurrentlyProducingVideo = producerClient.isProducingVideo();
+
+                producerClient.initIncomingSSRCs({
+                    audio_ssrc: d.audio_ssrc,
+                    video_ssrc: d.video_ssrc,
+                    rtx_ssrc: d.rtx_ssrc
+                });
+
+                if (wantsToProduceAudio && !isCurrentlyProducingAudio) {
+                    console.log(`[MEDIA RELAY AGENT] [${user_id}] Starting audio production with ssrc ${d.audio_ssrc}`);
+                    await producerClient.publishTrack("audio", { audio_ssrc: d.audio_ssrc });
+
+                    for (const client of producerClient.room.clients.values()) {
+                        if (client.user_id === user_id) continue;
+                        await client.subscribeToTrack(user_id, "audio");
+                        clientsThatNeedUpdate.add(client);
                     }
                 }
-            }),
-        );
+                else if (!wantsToProduceAudio && isCurrentlyProducingAudio) {
+                    console.log(`[MEDIA RELAY AGENT] [${user_id}] Stopping audio production.`);
+                    producerClient.stopPublishingTrack("audio");
 
-        if (Object.entries(video_batch).length > 0) {
-            WebSocket.send(JSON.stringify({
-                op: "VIDEO_BATCH",
-                d: video_batch
-            }));
-        }
+                    for (const client of producerClient.room.clients.values()) {
+                        if (client.user_id !== user_id) clientsThatNeedUpdate.add(client);
+                    }
+                }
 
-        WebSocket.send(JSON.stringify({
-            op: "SPEAKING_BATCH",
-            d: speaking_batch
-        }));
-    } else if (json.op === 'VIDEO') {
-        let user_id = json.d.user_id;
-        let d = json.d;
+                if (wantsToProduceVideo && !isCurrentlyProducingVideo) {
+                    console.log(`[MEDIA RELAY AGENT] [${user_id}] Starting video production with ssrc ${d.video_ssrc}`);
+                    await producerClient.publishTrack("video", { video_ssrc: d.video_ssrc, rtx_ssrc: d.rtx_ssrc });
 
-        let user = users.get(user_id);
+                    for (const client of producerClient.room.clients.values()) {
+                        if (client.user_id === user_id) continue;
+                        await client.subscribeToTrack(user_id, "video");
+                        clientsThatNeedUpdate.add(client);
+                    }
+                }
+                else if (!wantsToProduceVideo && isCurrentlyProducingVideo) {
+                    console.log(`[MEDIA RELAY AGENT] [${user_id}] Stopping video production.`);
+                    producerClient.stopPublishingTrack("video");
 
-        if (!user) {
-            return;
-        }
+                    for (const client of producerClient.room.clients.values()) {
+                        if (client.user_id !== user_id) clientsThatNeedUpdate.add(client);
+                    }
+                }
 
-        let producerClient = user.client;
+                await Promise.all(
+                    Array.from(clientsThatNeedUpdate).map((client) => {
+                        const ssrcs = client.getOutgoingStreamSSRCsForUser(user_id);
 
-        const video_batch = {};
-        const clientsThatNeedUpdate = new Set();
-        const wantsToProduceAudio = d.audio_ssrc !== 0;
-        const wantsToProduceVideo = d.video_ssrc !== 0;
+                        video_batch[client.user_id] = {
+                            op: 12,
+                            d: {
+                                user_id: user_id,
+                                audio_ssrc: ssrcs.audio_ssrc,
+                                video_ssrc: ssrcs.video_ssrc,
+                                rtx_ssrc: ssrcs.rtx_ssrc
+                            },
+                        };
+                    }),
+                );
 
-        const isCurrentlyProducingAudio = producerClient.isProducingAudio();
-        const isCurrentlyProducingVideo = producerClient.isProducingVideo();
-
-        producerClient.initIncomingSSRCs({
-            audio_ssrc: d.audio_ssrc,
-            video_ssrc: d.video_ssrc,
-            rtx_ssrc: d.rtx_ssrc
+                if (Object.entries(video_batch).length > 0) {
+                    socket.send(JSON.stringify({
+                        op: "VIDEO_BATCH",
+                        d: video_batch
+                    }));
+                }
+            }
         });
 
-        if (wantsToProduceAudio && !isCurrentlyProducingAudio) {
-            console.log(`[MEDIA RELAY CLIENT] [${user_id}] Starting audio production with ssrc ${d.audio_ssrc}`);
-            await producerClient.publishTrack("audio", { audio_ssrc: d.audio_ssrc });
-
-            for (const client of producerClient.room.clients.values()) {
-                if (client.user_id === user_id) continue;
-                await client.subscribeToTrack(user_id, "audio");
-                clientsThatNeedUpdate.add(client);
+        socket.on('close', () => {
+            console.log(`[MEDIA RELAY AGENT] Main server disconnected!`);
+            if (currentSocket === socket) {
+                currentSocket = null;
+                users.clear();
             }
-        }
-        else if (!wantsToProduceAudio && isCurrentlyProducingAudio) {
-            console.log(`[MEDIA RELAY CLIENT] [${user_id}] Stopping audio production.`);
-            producerClient.stopPublishingTrack("audio");
+        });
 
-            for (const client of producerClient.room.clients.values()) {
-                if (client.user_id !== user_id) clientsThatNeedUpdate.add(client);
-            }
-        }
+        socket.on('error', (err) => {
+            console.log(`[MEDIA RELAY AGENT] Socket error: ${err}`);
+        });
+    });
+}
 
-        if (wantsToProduceVideo && !isCurrentlyProducingVideo) {
-            console.log(`[MEDIA RELAY CLIENT] [${user_id}] Starting video production with ssrc ${d.video_ssrc}`);
-            await producerClient.publishTrack("video", { video_ssrc: d.video_ssrc, rtx_ssrc: d.rtx_ssrc });
-
-            for (const client of producerClient.room.clients.values()) {
-                if (client.user_id === user_id) continue;
-                await client.subscribeToTrack(user_id, "video");
-                clientsThatNeedUpdate.add(client);
-            }
-        }
-        else if (!wantsToProduceVideo && isCurrentlyProducingVideo) {
-            console.log(`[MEDIA RELAY CLIENT] [${user_id}] Stopping video production.`);
-            producerClient.stopPublishingTrack("video");
-
-            for (const client of producerClient.room.clients.values()) {
-                if (client.user_id !== user_id) clientsThatNeedUpdate.add(client);
-            }
-        }
-
-        await Promise.all(
-            Array.from(clientsThatNeedUpdate).map((client) => {
-                const ssrcs = client.getOutgoingStreamSSRCsForUser(user_id);
-
-                video_batch[client.user_id] = {
-                    op: 12,
-                    d: {
-                        user_id: user_id,
-                        audio_ssrc: ssrcs.audio_ssrc,
-                        video_ssrc: ssrcs.video_ssrc,
-                        rtx_ssrc: ssrcs.rtx_ssrc
-                    },
-                };
-            }),
-        );
-
-        if (Object.entries(video_batch).length > 0) {
-            WebSocket.send(JSON.stringify({
-                op: "VIDEO_BATCH",
-                d: video_batch
-            }));
-        }
-    }
-});
+start();

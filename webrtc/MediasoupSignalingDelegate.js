@@ -48,7 +48,7 @@ class MediasoupSignalingDelegate {
             this._workers.push(worker);
         }
 
-        console.log(`[MEDIA RELAY CLIENT] Media Server online on ${this.ip}:${this.port}`);
+        console.log(`[MEDIA RELAY AGENT] Media Server online on ${this.ip}:${this.port}`);
     }
 
     async join(roomId, userId, ws, type) {
