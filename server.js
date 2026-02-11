@@ -133,11 +133,27 @@ function getIPAddress() {
 
 async function start() {
     let ip_address = getIPAddress();
+    let lat = 0;
+    let lon = 0;
 
     if (use_public_ip) {
-        let try_get_ip = await fetch("https://checkip.amazonaws.com");
-
-        ip_address = await try_get_ip.text();
+        try {
+            let try_get_ip = await fetch("http://ip-api.com/json");
+            let data = await try_get_ip.json();
+            ip_address = data.query;
+            lat = data.lat;
+            lon = data.lon;
+            console.log(`[MEDIA PROXY AGENT] Detected Public IP: ${ip_address} (Location: ${lat}, ${lon})`);
+        } catch (e) {
+            console.error(`[MEDIA PROXY AGENT] Failed to fetch public IP/Location: ${e.message}`);
+            try {
+                let try_get_ip = await fetch("https://checkip.amazonaws.com");
+                ip_address = await try_get_ip.text();
+                ip_address = ip_address.trim();
+            } catch (e2) {
+                console.error(`[MEDIA PROXY AGENT] Failed fallback IP fetch: ${e2.message}`);
+            }
+        }
     } 
 
     await mediaserver.start(ip_address, minPort, maxPort, true);
@@ -162,6 +178,8 @@ async function start() {
             d: {
                 public_ip: ip_address,
                 public_port: mediaserver.port,
+                lat: lat,
+                lon: lon,
                 timestamp: Date.now()
             }
         }));
