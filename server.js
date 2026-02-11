@@ -289,8 +289,13 @@ async function start() {
                 let producerClient = user.client;
 
                 if (!producerClient.isProducingAudio()) {
-                    console.log(`[MEDIA PROXY AGENT] Client ${user_id} sent a speaking packet but has no audio producer.`);
-                    return;
+                    if (!json.d.speaking || !audio_ssrc) {
+                        return;
+                    }
+
+                    console.log(
+                        `Client ${user_id} sent a speaking packet but has no audio producer. Attempting to initialize...`,
+                    );
                 }
 
                 let incomingSSRCs = producerClient.getIncomingStreamSSRCs();
